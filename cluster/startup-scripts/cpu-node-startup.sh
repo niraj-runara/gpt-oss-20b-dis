@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# GCE metadata startup-script for `cpu-node` (n2-standard-8).
+# Setup script for `cpu-node` (n2-standard-8).
 # Installs/updates and starts: cache_server, kv_broker, router, nginx.
 #
-# Deploy with:
-#   gcloud compute instances add-metadata cpu-node --zone=us-central1-a \
-#     --metadata-from-file startup-script=cpu-node-startup.sh
-#   gcloud compute instances reset cpu-node --zone=us-central1-a
-# (or paste directly into the instance's "startup-script" metadata in the console)
+# Normally you don't run this by hand — cluster/deploy.sh pushes
+# config/cluster.env to /opt/runara/config/cluster.env and then runs this
+# script for you over SSH. It can also be pasted into the instance's
+# "startup-script" metadata for self-healing on reboot, as long as
+# /opt/runara/config/cluster.env already exists on disk (deploy.sh's job).
 #
-# Idempotent — safe to re-run on every boot / reset.
+# Idempotent — safe to re-run any time.
 #
 # *** VERIFY BEFORE FIRST RUN ***
 # sglang.cache_server / sglang.kv_broker / sglang.router are Runara's custom
@@ -22,40 +22,13 @@
 # ==============================================================================
 set -euo pipefail
 
+if [ ! -f /opt/runara/config/cluster.env ]; then
+  echo "ERROR: /opt/runara/config/cluster.env not found. Run cluster/deploy.sh" \
+       "from your workstation first — it stages this file before running this script." >&2
+  exit 1
+fi
+
 mkdir -p /opt/runara/bin /opt/runara/config
-
-# ---------------------------------------------------------------------------
-# Cluster configuration (mirrors config/cluster.env in the repo)
-# ---------------------------------------------------------------------------
-cat > /opt/runara/config/cluster.env <<'EOF'
-export PROJECT_ID="luminous-smithy-490001-i9"
-export ZONE="us-central1-a"
-
-export CPU_NODE="cpu-node"
-export PREFILL_NODE="prefill-node"
-export DECODE_NODE="decode-node"
-export UNIFIED_NODE="unified-node"
-
-export CPU_NODE_HOST="cpu-node"
-export PREFILL_NODE_HOST="prefill-node"
-export DECODE_NODE_HOST="decode-node"
-export UNIFIED_NODE_HOST="unified-node"
-
-export MODEL_GCS_PATH="gs://runara-models-gcp/gpt-oss-20b-fp8"
-export MODEL_LOCAL_DIR="/mnt/models/gpt-oss-20b-fp8"
-
-export SGLANG_PYTHON="python3"
-export SGLANG_TP_SIZE=1
-export SGLANG_MEM_FRACTION=0.85
-
-export CACHE_SERVER_PORT=8100
-export KV_BROKER_PORT=8200
-export PREFILL_WORKER_PORT=30000
-export DECODE_WORKER_PORT=30001
-export ROUTER_PORT=8000
-export UNIFIED_SERVER_PORT=30000
-export NGINX_PORT=80
-EOF
 
 # ---------------------------------------------------------------------------
 # Shared helper: block until a dependency is reachable/healthy, or fail.

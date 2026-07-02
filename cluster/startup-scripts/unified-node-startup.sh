@@ -1,53 +1,39 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# GCE metadata startup-script for `unified-node` — the non-disaggregated
-# baseline used for comparison. g2-standard-16, 1x L4 (same GPU as one
-# prefill/decode worker), running a single combined SGLang server.
+# Setup script for `unified-node` — the non-disaggregated baseline used for
+# comparison. g2-standard-16, 1x L4 (same GPU as one prefill/decode worker),
+# running a single combined SGLang server.
 #
 # This instance is NOT part of the 3-node disaggregated cluster described in
 # the architecture — it exists purely so the benchmark can compare unified vs
-# disaggregated serving on equivalent per-worker hardware. Create it with:
+# disaggregated serving on equivalent per-worker hardware. Create it (empty,
+# no startup-script metadata) with:
 #   gcloud compute instances create unified-node \
-#     --zone=us-central1-a --machine-type=g2-standard-16 \
+#     --project=luminous-smithy-490001-i9 --zone=us-central1-a \
+#     --machine-type=g2-standard-16 \
 #     --accelerator=type=nvidia-l4,count=1 --maintenance-policy=TERMINATE \
-#     --image-family=runara-base-sglang --image-project=<your-image-project> \
-#     --metadata-from-file startup-script=unified-node-startup.sh
+#     --image=runara-base-sglang-1781835894
 #
-# Idempotent — safe to re-run on every boot / reset.
+# (pinned to the exact image; swap to --image-family=runara-base-sglang if you
+# want new instances to always pick up the latest image in that family instead)
+#
+# Then set UNIFIED_NODE=unified-node in cluster/deploy.env and run
+# cluster/deploy.sh — it pushes config/cluster.env and runs this script for
+# you over SSH. It can also be pasted into the instance's "startup-script"
+# metadata for self-healing on reboot, as long as
+# /opt/runara/config/cluster.env already exists on disk (deploy.sh's job).
+#
+# Idempotent — safe to re-run any time.
 # ==============================================================================
 set -euo pipefail
 
+if [ ! -f /opt/runara/config/cluster.env ]; then
+  echo "ERROR: /opt/runara/config/cluster.env not found. Run cluster/deploy.sh" \
+       "from your workstation first — it stages this file before running this script." >&2
+  exit 1
+fi
+
 mkdir -p /opt/runara/bin /opt/runara/config
-
-cat > /opt/runara/config/cluster.env <<'EOF'
-export PROJECT_ID="luminous-smithy-490001-i9"
-export ZONE="us-central1-a"
-
-export CPU_NODE="cpu-node"
-export PREFILL_NODE="prefill-node"
-export DECODE_NODE="decode-node"
-export UNIFIED_NODE="unified-node"
-
-export CPU_NODE_HOST="cpu-node"
-export PREFILL_NODE_HOST="prefill-node"
-export DECODE_NODE_HOST="decode-node"
-export UNIFIED_NODE_HOST="unified-node"
-
-export MODEL_GCS_PATH="gs://runara-models-gcp/gpt-oss-20b-fp8"
-export MODEL_LOCAL_DIR="/mnt/models/gpt-oss-20b-fp8"
-
-export SGLANG_PYTHON="python3"
-export SGLANG_TP_SIZE=1
-export SGLANG_MEM_FRACTION=0.85
-
-export CACHE_SERVER_PORT=8100
-export KV_BROKER_PORT=8200
-export PREFILL_WORKER_PORT=30000
-export DECODE_WORKER_PORT=30001
-export ROUTER_PORT=8000
-export UNIFIED_SERVER_PORT=30000
-export NGINX_PORT=80
-EOF
 
 cat > /opt/runara/bin/run_model_sync.sh <<'EOF'
 #!/usr/bin/env bash
