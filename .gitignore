@@ -4,8 +4,6 @@ config/cluster.env
 # Local deployment config (project, zone, instance names)
 cluster/deploy.env
 
-# Benchmark outputs
-benchmark/results/
 
 # Python
 __pycache__/
