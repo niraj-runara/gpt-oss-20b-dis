@@ -18,7 +18,7 @@ HOURLY_COST_USD = {
 
 DEPLOYMENT_INSTANCES = {
     "unified": {
-        "unified-node": "g2-standard-16",
+        "unified-node": "g2-standard-24",
     },
     "disaggregated": {
         "cpu-node": "n2-standard-8",

@@ -9,11 +9,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from cost_model import cost_per_million_tokens
+
 
 def load(path):
     with open(path) as f:
         data = json.load(f)
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    # Recompute from current cost_model (JSON may have stale costs from an older model).
+    df["cost_per_1m_tokens_usd"] = df.apply(
+        lambda row: cost_per_million_tokens(row["deployment"], row["tokens_per_sec"]),
+        axis=1,
+    )
+    return df
 
 
 def plot_metric(df, ycol, ylabel, title, out_path):
