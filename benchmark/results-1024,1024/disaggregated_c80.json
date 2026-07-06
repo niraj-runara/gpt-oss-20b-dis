@@ -1,0 +1,20 @@
+{
+  "concurrency": 80,
+  "num_requests": 400,
+  "num_success": 45,
+  "num_errors": 355,
+  "wall_time_s": 67.58605562499724,
+  "tokens_per_sec": 681.7974443674583,
+  "requests_per_sec": 0.665817816765096,
+  "latency_p50_s": 56.88687791698612,
+  "latency_p95_s": 65.4566393496003,
+  "latency_p99_s": 65.50878077506087,
+  "latency_mean_s": 58.71628770461151,
+  "errors_sample": [
+    "HTTP 503: {'error': {'type': 'Service Unavailable', 'code': 'server_selection_failed', 'message': 'No available servers: No available prefill workers (all circuits open or unhealthy)'}}",
+    "HTTP 503: {'error': {'type': 'Service Unavailable', 'code': 'server_selection_failed', 'message': 'No available servers: No available prefill workers (all circuits open or unhealthy)'}}",
+    "HTTP 503: {'error': {'type': 'Service Unavailable', 'code': 'server_selection_failed', 'message': 'No available servers: No available prefill workers (all circuits open or unhealthy)'}}",
+    "HTTP 503: {'error': {'type': 'Service Unavailable', 'code': 'server_selection_failed', 'message': 'No available servers: No available prefill workers (all circuits open or unhealthy)'}}",
+    "HTTP 503: {'error': {'type': 'Service Unavailable', 'code': 'server_selection_failed', 'message': 'No available servers: No available prefill workers (all circuits open or unhealthy)'}}"
+  ]
+}

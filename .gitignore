@@ -46,6 +46,5 @@ Thumbs.db
 # Logs
 *.log
 results/
-results-256,256/
-results-1024,1024/
+
 
