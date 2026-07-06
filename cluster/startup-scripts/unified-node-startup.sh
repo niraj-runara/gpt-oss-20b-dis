@@ -1,39 +1,24 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Setup script for `unified-node` — the non-disaggregated baseline used for
-# comparison. g2-standard-16, 1x L4 (same GPU as one prefill/decode worker),
-# running a single combined SGLang server.
+# comparison. g2-standard-24, 2x L4, running a single combined SGLang server.
 #
-# This instance is NOT part of the 3-node disaggregated cluster described in
-# the architecture — it exists purely so the benchmark can compare unified vs
-# disaggregated serving on equivalent per-worker hardware. Create it (empty,
-# no startup-script metadata) with:
-#   gcloud compute instances create unified-node \
-#     --project=luminous-smithy-490001-i9 --zone=us-central1-a \
-#     --machine-type=g2-standard-16 \
-#     --accelerator=type=nvidia-l4,count=1 --maintenance-policy=TERMINATE \
-#     --image=runara-base-sglang-1781835894
-#
-# (pinned to the exact image; swap to --image-family=runara-base-sglang if you
-# want new instances to always pick up the latest image in that family instead)
-#
-# Then set UNIFIED_NODE=unified-node in cluster/deploy.env and run
-# cluster/deploy.sh — it pushes config/cluster.env and runs this script for
-# you over SSH. It can also be pasted into the instance's "startup-script"
-# metadata for self-healing on reboot, as long as
-# /opt/runara/config/cluster.env already exists on disk (deploy.sh's job).
+# Then run cluster/deploy-unified.sh — it pushes config/cluster.env and runs
+# this script for you over SSH (without touching the disaggregated cluster).
 #
 # Idempotent — safe to re-run any time.
 # ==============================================================================
 set -euo pipefail
 
 if [ ! -f /opt/runara/config/cluster.env ]; then
-  echo "ERROR: /opt/runara/config/cluster.env not found. Run cluster/deploy.sh" \
+  echo "ERROR: /opt/runara/config/cluster.env not found. Run cluster/deploy-unified.sh" \
        "from your workstation first — it stages this file before running this script." >&2
   exit 1
 fi
 
-mkdir -p /opt/runara/bin /opt/runara/config
+mkdir -p /opt/runara/bin /opt/runara/config /opt/runara/moe-configs
+
+MOE_CONTAINER_CFG="/sgl-workspace/sglang/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_6_0"
 
 cat > /opt/runara/bin/run_model_sync.sh <<'EOF'
 #!/usr/bin/env bash
@@ -64,18 +49,30 @@ EOF
 
 # ---------------------------------------------------------------------------
 # Combined (non-disaggregated) SGLang server
+# L4 has 101376 bytes SMEM; default fused-MoE Triton configs need 147456.
+# Mount tuned configs from /opt/runara/moe-configs (deploy-unified.sh stages them).
 # ---------------------------------------------------------------------------
-cat > /opt/runara/bin/run_unified_server.sh <<'EOF'
+cat > /opt/runara/bin/run_unified_server.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 source /opt/runara/config/cluster.env
-exec "${SGLANG_PYTHON}" -m sglang.launch_server \
-  --model-path "${MODEL_LOCAL_DIR}" \
-  --host 0.0.0.0 \
-  --port "${UNIFIED_SERVER_PORT}" \
-  --tp-size "${SGLANG_TP_SIZE}" \
-  --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
-  --quantization fp8
+docker rm -f sglang-unified 2>/dev/null || true
+exec docker run --name sglang-unified \\
+  --gpus all \\
+  --network host \\
+  --shm-size "\${SGLANG_DOCKER_SHM_SIZE}" \\
+  -v "\${MODEL_LOCAL_DIR}:\${MODEL_LOCAL_DIR}:ro" \\
+  -v /opt/runara/moe-configs:${MOE_CONTAINER_CFG} \\
+  "\${SGLANG_DOCKER_IMAGE}" \\
+  python3 -m sglang.launch_server \\
+  --model-path "\${MODEL_LOCAL_DIR}" \\
+  --host 0.0.0.0 \\
+  --port "\${UNIFIED_SERVER_PORT}" \\
+  --tp-size "\${SGLANG_TP_SIZE}" \\
+  --mem-fraction-static "\${SGLANG_MEM_FRACTION}" \\
+  --quantization fp8 \\
+  --disable-cuda-graph \\
+  --disable-piecewise-cuda-graph
 EOF
 chmod +x /opt/runara/bin/run_unified_server.sh
 
@@ -90,8 +87,8 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 ExecStart=/opt/runara/bin/run_unified_server.sh
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 

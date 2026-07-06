@@ -20,6 +20,17 @@ def build_prompt(n_tokens: int) -> str:
     return " ".join(["hello"] * words)
 
 
+async def read_response_body(resp):
+    text = await resp.text()
+    content_type = resp.headers.get("Content-Type", "")
+    if "json" in content_type or text.lstrip().startswith(("{", "[")):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    return text
+
+
 async def send_one(session, url, model, prompt, max_tokens, timeout, results, errors):
     payload = {
         "model": model,
@@ -31,10 +42,13 @@ async def send_one(session, url, model, prompt, max_tokens, timeout, results, er
     start = time.perf_counter()
     try:
         async with session.post(url, json=payload, timeout=timeout) as resp:
-            body = await resp.json()
+            body = await read_response_body(resp)
             end = time.perf_counter()
             if resp.status != 200:
                 errors.append(f"HTTP {resp.status}: {str(body)[:200]}")
+                return
+            if not isinstance(body, dict):
+                errors.append(f"HTTP {resp.status}: expected JSON object, got {str(body)[:200]}")
                 return
             usage = body.get("usage", {})
             completion_tokens = usage.get("completion_tokens", max_tokens)

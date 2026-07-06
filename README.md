@@ -15,8 +15,8 @@
                                    ▼         ▼
                  ┌───────────────────┐   ┌───────────────────┐
                  │ prefill-node       │   │ decode-node        │
-                 │ g2-standard-16     │   │ g2-standard-16     │
-                 │ 1x L4              │   │ 1x L4              │
+                 │ g2-standard-24     │   │ g2-standard-24     │
+                 │ 2x L4              │   │ 2x L4              │
                  └───────────────────┘   └───────────────────┘
 
   unified-node (g2-standard-16, 1x L4) — standalone baseline for comparison,
@@ -24,7 +24,10 @@
 ```
 
 Model weights: `gs://runara-models-gcp/gpt-oss-20b-fp8/`, synced to local disk
-(`/mnt/models/gpt-oss-20b-fp8`) on every GPU node at boot.
+(`/mnt/models/gpt-oss-20b-fp8`) on every GPU node at boot. The checkpoint stores
+**simulated FP8 in bf16 tensors** (GPTQ W8 / A16 at runtime). Use
+`--quantization fp8` so SGLang online-quants at load (fits 2× L4); do not load
+raw bf16 (OOM). Unified also needs `--disable-piecewise-cuda-graph` on L4.
 Boot image: `runara-base-sglang-1781835894` (family `runara-base-sglang`, SGLang preinstalled).
 
 GCP project: `luminous-smithy-490001-i9`, zone: `us-central1-a`.
@@ -89,6 +92,44 @@ checked. Before first use:
    DNS resolves instances by short name. If they're in different networks,
    this breaks — use internal IPs instead (see step 4 below).
 
+## Quick start (3 instances)
+
+Prereqs: `gcloud` CLI installed, authenticated to project
+`luminous-smithy-490001-i9`, and IAP tunneling enabled (deploy uses
+`--tunnel-through-iap` for SSH).
+
+```bash
+# 1. Create cpu-node + prefill-node + decode-node (skip any that already exist)
+gcloud compute instances create cpu-node \
+  --project=luminous-smithy-490001-i9 --zone=us-central1-a \
+  --machine-type=n2-standard-8 --image=runara-base-sglang-1781835894
+
+gcloud compute instances create prefill-node decode-node \
+  --project=luminous-smithy-490001-i9 --zone=us-central1-a \
+  --machine-type=g2-standard-24 --maintenance-policy=TERMINATE \
+  --image=runara-base-sglang-1781835894
+
+# 2. Edit cluster/deploy.env — set PROJECT_ID, ZONE, and instance names
+#    (defaults already match the names above; leave UNIFIED_NODE blank)
+
+# 3. Deploy config, install services, bring cluster up
+chmod +x cluster/deploy.sh cluster/orchestrate.sh
+./cluster/deploy.sh
+
+# 4. Check everything is running
+./cluster/orchestrate.sh status
+```
+
+First deploy takes a while: each GPU node syncs model weights from GCS
+(`gs://runara-models-gcp/gpt-oss-20b-fp8/`) before workers start. When
+`orchestrate.sh status` shows all services `active`, hit the cluster via
+cpu-node's external IP on port 80:
+
+```bash
+gcloud compute instances describe cpu-node --zone=us-central1-a \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+```
+
 ## Deploy
 
 Instances are created empty (just booted from the image, no metadata
@@ -102,8 +143,7 @@ startup-script needed) and configured over SSH by `cluster/deploy.sh`.
 
    gcloud compute instances create prefill-node decode-node \
      --project=luminous-smithy-490001-i9 --zone=us-central1-a \
-     --machine-type=g2-standard-16 \
-     --accelerator=type=nvidia-l4,count=1 --maintenance-policy=TERMINATE \
+     --machine-type=g2-standard-24 --maintenance-policy=TERMINATE \
      --image=runara-base-sglang-1781835894
 
    # optional, only for the unified-vs-disaggregated benchmark comparison:
@@ -113,6 +153,10 @@ startup-script needed) and configured over SSH by `cluster/deploy.sh`.
      --accelerator=type=nvidia-l4,count=1 --maintenance-policy=TERMINATE \
      --image=runara-base-sglang-1781835894
    ```
+
+   `g2-standard-24` bundles 2x NVIDIA L4 GPUs — no separate
+   `--accelerator` flag needed. SGLang runs with `--tp-size 2` on both
+   prefill and decode workers.
 
 2. **Fill in [`cluster/deploy.env`](cluster/deploy.env)** with your project,
    zone, and whatever you actually named the instances above (names only —
@@ -159,10 +203,8 @@ gcloud compute instances describe unified-node --zone=us-central1-a \
 ```bash
 pip install -r benchmark/requirements.txt
 
-python3 benchmark/run_benchmark.py \
-  --unified-endpoint http://<unified-node-external-ip> \
-  --disaggregated-endpoint http://<cpu-node-external-ip>
-
+# Copy benchmark/benchmark.env.example -> benchmark/benchmark.env and set IPs
+python3 benchmark/run_benchmark.py
 python3 benchmark/plot_results.py
 ```
 

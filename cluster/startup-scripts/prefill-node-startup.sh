@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Setup script for `prefill-node` (g2-standard-16, 1x L4).
+# Setup script for `prefill-node` (g2-standard-24, 2x L4, tp-size 2).
 # Syncs model weights from GCS, then runs the SGLang prefill worker.
 #
 # Normally you don't run this by hand — cluster/deploy.sh pushes
@@ -11,11 +11,8 @@
 #
 # Idempotent — safe to re-run any time.
 #
-# *** VERIFY BEFORE FIRST RUN ***
-# --disaggregation-mode / --kv-broker-url / --cache-server-url are best-guess
-# flag names for Runara's custom sglang build. Confirm with:
-#   python3 -m sglang.launch_server --help
-# on the runara-base-sglang image and adjust run_prefill_worker.sh if needed.
+# SGLang runs inside Docker (lmsysorg/sglang). Upstream PD prefill worker —
+# no cache_server / kv_broker.
 # ==============================================================================
 set -euo pipefail
 
@@ -25,7 +22,9 @@ if [ ! -f /opt/runara/config/cluster.env ]; then
   exit 1
 fi
 
-mkdir -p /opt/runara/bin /opt/runara/config
+mkdir -p /opt/runara/bin /opt/runara/config /opt/runara/moe-configs
+
+MOE_CONTAINER_CFG="/sgl-workspace/sglang/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_6_0"
 
 cat > /opt/runara/bin/wait_for.sh <<'EOF'
 #!/usr/bin/env bash
@@ -93,22 +92,28 @@ EOF
 # ---------------------------------------------------------------------------
 # Prefill worker
 # ---------------------------------------------------------------------------
-cat > /opt/runara/bin/run_prefill_worker.sh <<'EOF'
+cat > /opt/runara/bin/run_prefill_worker.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 source /opt/runara/config/cluster.env
-/opt/runara/bin/wait_for.sh tcp "${CPU_NODE_HOST}" "${CACHE_SERVER_PORT}" 600
-/opt/runara/bin/wait_for.sh tcp "${CPU_NODE_HOST}" "${KV_BROKER_PORT}" 600
-exec "${SGLANG_PYTHON}" -m sglang.launch_server \
-  --model-path "${MODEL_LOCAL_DIR}" \
-  --host 0.0.0.0 \
-  --port "${PREFILL_WORKER_PORT}" \
-  --tp-size "${SGLANG_TP_SIZE}" \
-  --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
-  --quantization fp8 \
-  --disaggregation-mode prefill \
-  --kv-broker-url "http://${CPU_NODE_HOST}:${KV_BROKER_PORT}" \
-  --cache-server-url "http://${CPU_NODE_HOST}:${CACHE_SERVER_PORT}"
+docker rm -f sglang-prefill 2>/dev/null || true
+exec docker run --name sglang-prefill \\
+  --gpus all \\
+  --network host \\
+  --shm-size "\${SGLANG_DOCKER_SHM_SIZE}" \\
+  -v "\${MODEL_LOCAL_DIR}:\${MODEL_LOCAL_DIR}:ro" \\
+  -v /opt/runara/moe-configs:${MOE_CONTAINER_CFG} \\
+  "\${SGLANG_DOCKER_IMAGE}" \\
+  python3 -m sglang.launch_server \\
+  --model-path "\${MODEL_LOCAL_DIR}" \\
+  --host 0.0.0.0 \\
+  --port "\${PREFILL_WORKER_PORT}" \\
+  --tp-size "\${SGLANG_TP_SIZE}" \\
+  --mem-fraction-static "\${SGLANG_MEM_FRACTION}" \\
+  --quantization fp8 \\
+  --disaggregation-mode prefill \\
+  --disaggregation-transfer-backend "\${DISAGG_TRANSFER_BACKEND}" \\
+  --disaggregation-bootstrap-port "\${DISAGG_BOOTSTRAP_PORT}"
 EOF
 chmod +x /opt/runara/bin/run_prefill_worker.sh
 

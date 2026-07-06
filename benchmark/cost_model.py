@@ -12,6 +12,8 @@ HOURLY_COST_USD = {
     "n2-standard-8": 0.3888,
     # 16 vCPU / 64 GB + 1x NVIDIA L4 (bundled g2 pricing), us-central1 on-demand.
     "g2-standard-16": 1.0,
+    # 24 vCPU / 96 GB + 2x NVIDIA L4 (bundled g2 pricing), us-central1 on-demand.
+    "g2-standard-24": 1.94,
 }
 
 DEPLOYMENT_INSTANCES = {
@@ -20,8 +22,8 @@ DEPLOYMENT_INSTANCES = {
     },
     "disaggregated": {
         "cpu-node": "n2-standard-8",
-        "prefill-node": "g2-standard-16",
-        "decode-node": "g2-standard-16",
+        "prefill-node": "g2-standard-24",
+        "decode-node": "g2-standard-24",
     },
 }
 

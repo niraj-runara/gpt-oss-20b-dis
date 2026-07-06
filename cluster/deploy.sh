@@ -15,7 +15,7 @@
 #      units, the wait_for.sh health-check helper, and nginx where relevant.
 #
 # Then it hands off to orchestrate.sh, which brings everything up in the
-# required order: cache_server -> kv_broker -> prefill -> decode -> router+nginx.
+# required order: prefill -> decode -> router+nginx.
 #
 # Usage: ./cluster/deploy.sh
 # Idempotent — re-run any time after editing deploy.env or a startup script.
@@ -56,12 +56,13 @@ export UNIFIED_NODE_HOST="${UNIFIED_NODE:-unified-node}"
 export MODEL_GCS_PATH="gs://runara-models-gcp/gpt-oss-20b-fp8"
 export MODEL_LOCAL_DIR="/mnt/models/gpt-oss-20b-fp8"
 
-export SGLANG_PYTHON="python3"
-export SGLANG_TP_SIZE=1
+export SGLANG_DOCKER_IMAGE="lmsysorg/sglang:v0.5.13-cu129"
+export SGLANG_DOCKER_SHM_SIZE="16g"
+export SGLANG_TP_SIZE=2
 export SGLANG_MEM_FRACTION=0.85
+export DISAGG_TRANSFER_BACKEND="mooncake_tcp"
+export DISAGG_BOOTSTRAP_PORT=9000
 
-export CACHE_SERVER_PORT=8100
-export KV_BROKER_PORT=8200
 export PREFILL_WORKER_PORT=30000
 export DECODE_WORKER_PORT=30001
 export ROUTER_PORT=8000
@@ -73,9 +74,14 @@ echo "Rendered ${CLUSTER_ENV} from deploy.env"
 push_cluster_env() {
   local instance="$1"
   echo ">>> [${instance}] pushing cluster.env"
-  "${GCLOUD_SSH[@]}" "${instance}" --command "sudo mkdir -p /opt/runara/config"
+  "${GCLOUD_SSH[@]}" "${instance}" --command "sudo mkdir -p /opt/runara/config /opt/runara/moe-configs"
   "${GCLOUD_SCP[@]}" "${CLUSTER_ENV}" "${instance}:/tmp/cluster.env"
   "${GCLOUD_SSH[@]}" "${instance}" --command "sudo mv /tmp/cluster.env /opt/runara/config/cluster.env"
+  if [[ "${instance}" == "${PREFILL_NODE}" || "${instance}" == "${DECODE_NODE}" || "${instance}" == "${UNIFIED_NODE:-}" ]]; then
+    echo ">>> [${instance}] pushing L4 MoE configs"
+    "${GCLOUD_SCP[@]}" "${SCRIPT_DIR}/moe-configs/"*.json "${instance}:/tmp/"
+    "${GCLOUD_SSH[@]}" "${instance}" --command "sudo mv /tmp/E=*.json /opt/runara/moe-configs/"
+  fi
 }
 
 push_and_run_setup() {

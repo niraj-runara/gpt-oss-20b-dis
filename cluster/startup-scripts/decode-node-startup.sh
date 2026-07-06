@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Setup script for `decode-node` (g2-standard-16, 1x L4).
+# Setup script for `decode-node` (g2-standard-24, 2x L4, tp-size 2).
 # Syncs model weights from GCS, then runs the SGLang decode worker.
 #
 # Normally you don't run this by hand — cluster/deploy.sh pushes
@@ -11,8 +11,7 @@
 #
 # Idempotent — safe to re-run any time.
 #
-# *** VERIFY BEFORE FIRST RUN *** — see prefill-node-startup.sh header note;
-# same custom-flag caveats apply here.
+# SGLang runs inside Docker (lmsysorg/sglang). Upstream PD decode worker.
 # ==============================================================================
 set -euo pipefail
 
@@ -22,7 +21,9 @@ if [ ! -f /opt/runara/config/cluster.env ]; then
   exit 1
 fi
 
-mkdir -p /opt/runara/bin /opt/runara/config
+mkdir -p /opt/runara/bin /opt/runara/config /opt/runara/moe-configs
+
+MOE_CONTAINER_CFG="/sgl-workspace/sglang/python/sglang/srt/layers/moe/moe_runner/triton_utils/configs/triton_3_6_0"
 
 cat > /opt/runara/bin/wait_for.sh <<'EOF'
 #!/usr/bin/env bash
@@ -87,22 +88,27 @@ EOF
 # ---------------------------------------------------------------------------
 # Decode worker
 # ---------------------------------------------------------------------------
-cat > /opt/runara/bin/run_decode_worker.sh <<'EOF'
+cat > /opt/runara/bin/run_decode_worker.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 source /opt/runara/config/cluster.env
-/opt/runara/bin/wait_for.sh tcp "${CPU_NODE_HOST}" "${CACHE_SERVER_PORT}" 600
-/opt/runara/bin/wait_for.sh tcp "${CPU_NODE_HOST}" "${KV_BROKER_PORT}" 600
-exec "${SGLANG_PYTHON}" -m sglang.launch_server \
-  --model-path "${MODEL_LOCAL_DIR}" \
-  --host 0.0.0.0 \
-  --port "${DECODE_WORKER_PORT}" \
-  --tp-size "${SGLANG_TP_SIZE}" \
-  --mem-fraction-static "${SGLANG_MEM_FRACTION}" \
-  --quantization fp8 \
-  --disaggregation-mode decode \
-  --kv-broker-url "http://${CPU_NODE_HOST}:${KV_BROKER_PORT}" \
-  --cache-server-url "http://${CPU_NODE_HOST}:${CACHE_SERVER_PORT}"
+docker rm -f sglang-decode 2>/dev/null || true
+exec docker run --name sglang-decode \\
+  --gpus all \\
+  --network host \\
+  --shm-size "\${SGLANG_DOCKER_SHM_SIZE}" \\
+  -v "\${MODEL_LOCAL_DIR}:\${MODEL_LOCAL_DIR}:ro" \\
+  -v /opt/runara/moe-configs:${MOE_CONTAINER_CFG} \\
+  "\${SGLANG_DOCKER_IMAGE}" \\
+  python3 -m sglang.launch_server \\
+  --model-path "\${MODEL_LOCAL_DIR}" \\
+  --host 0.0.0.0 \\
+  --port "\${DECODE_WORKER_PORT}" \\
+  --tp-size "\${SGLANG_TP_SIZE}" \\
+  --mem-fraction-static "\${SGLANG_MEM_FRACTION}" \\
+  --quantization fp8 \\
+  --disaggregation-mode decode \\
+  --disaggregation-transfer-backend "\${DISAGG_TRANSFER_BACKEND}"
 EOF
 chmod +x /opt/runara/bin/run_decode_worker.sh
 
